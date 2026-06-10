@@ -2,3 +2,5 @@ h5py
 pillow
 torch
 torchvision
+pyqt5
+numpy
