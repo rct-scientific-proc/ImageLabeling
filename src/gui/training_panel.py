@@ -33,6 +33,7 @@ class TrainingPanel(QWidget):
             "epochs": self._epochs.value(),
             "batch_size": self._batch_size.value(),
             "target_metric": self._target_metric.value(),
+            "val_split": self._val_split.value(),
         }
 
     def set_progress(self, value: int, maximum: int, status: str = "") -> None:
@@ -74,7 +75,14 @@ class TrainingPanel(QWidget):
         self._target_metric.setSingleStep(0.01)
         self._target_metric.setValue(0.90)
         self._target_metric.setDecimals(2)
-        form.addRow("Target accuracy:", self._target_metric)
+        form.addRow("Target val acc:", self._target_metric)
+
+        self._val_split = QDoubleSpinBox()
+        self._val_split.setRange(0.0, 0.9)
+        self._val_split.setSingleStep(0.05)
+        self._val_split.setValue(0.20)
+        self._val_split.setDecimals(2)
+        form.addRow("Val split:", self._val_split)
 
         self._btn_train = QPushButton("Start Training")
         self._btn_stop = QPushButton("Stop")

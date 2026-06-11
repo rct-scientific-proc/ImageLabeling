@@ -464,6 +464,7 @@ class MainWindow(QMainWindow):
             epochs=config["epochs"],
             batch_size=config["batch_size"],
             target_metric=config["target_metric"],
+            val_split=config["val_split"],
         )
         self._training_worker.sig_progress.connect(self._on_training_progress)
         self._training_worker.sig_finished.connect(self._on_training_finished)
