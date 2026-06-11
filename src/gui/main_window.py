@@ -85,6 +85,7 @@ class MainWindow(QMainWindow):
 
         self._image_grid = ImageGridWidget()
         self._image_grid.sig_cell_clicked.connect(self._on_cell_clicked)
+        self._image_grid.sig_cells_range_selected.connect(self._on_cells_range_selected)
         centre_col.addWidget(self._image_grid, stretch=1)
 
         # Action buttons below the grid
@@ -364,6 +365,25 @@ class MainWindow(QMainWindow):
             self._image_grid.mark_pending(dataset_index, True)
 
         self._update_add_labels_button()
+
+    def _on_cells_range_selected(self, dataset_indices: list) -> None:
+        """Assign the active label to all images in a shift-click range."""
+        if self._show_labeled:
+            return
+
+        active = self._label_panel.active_label_index
+        if active is None:
+            self.statusBar().showMessage("Select a label from the panel first.")
+            return
+
+        for dataset_index in dataset_indices:
+            self._pending_assignments[dataset_index] = active
+            self._image_grid.mark_pending(dataset_index, True)
+
+        self._update_add_labels_button()
+        self.statusBar().showMessage(
+            f"{len(dataset_indices)} image(s) marked as pending."
+        )
 
     # ------------------------------------------------------------------
     # Slots — Action buttons (stubs, fully wired in Phase 6 / 7)

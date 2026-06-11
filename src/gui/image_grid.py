@@ -48,7 +48,8 @@ def _hex_to_overlay(hex_colour: str, alpha: int = 110) -> QColor:
 class ImageCell(QFrame):
     """A single thumbnail cell in the image grid."""
 
-    clicked = pyqtSignal(int)   # emits dataset index
+    clicked = pyqtSignal(int)        # normal left-click — emits dataset index
+    shift_clicked = pyqtSignal(int)  # shift+left-click — emits dataset index
 
     def __init__(self, cell_size: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -152,7 +153,10 @@ class ImageCell(QFrame):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton and self._index >= 0:
-            self.clicked.emit(self._index)
+            if event.modifiers() & Qt.ShiftModifier:
+                self.shift_clicked.emit(self._index)
+            else:
+                self.clicked.emit(self._index)
         super().mousePressEvent(event)
 
 
@@ -167,7 +171,8 @@ class ImageGridWidget(QWidget):
     Call ``load_images()`` to populate the grid from numpy arrays.
     """
 
-    sig_cell_clicked = pyqtSignal(int)   # dataset index
+    sig_cell_clicked = pyqtSignal(int)              # single click — dataset index
+    sig_cells_range_selected = pyqtSignal(list)     # shift-click range — list of dataset indices
 
     # Default grid dimensions
     DEFAULT_ROWS = 3
@@ -190,6 +195,7 @@ class ImageGridWidget(QWidget):
         self._label_colours: dict[int, QColor] = {} # dataset index → overlay colour
 
         self._cells: list[ImageCell] = []
+        self._anchor_ds_index: int | None = None   # anchor for shift-click range
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -211,6 +217,7 @@ class ImageGridWidget(QWidget):
         self._pending = set(pending) if pending else set()
         self._label_names = dict(label_names) if label_names else {}
         self._label_colours = dict(label_colours) if label_colours else {}
+        self._anchor_ds_index = None
         self._page = 0
 
         # Convert numpy arrays → QPixmap (done once, cached)
@@ -327,7 +334,8 @@ class ImageGridWidget(QWidget):
         for r in range(self._rows):
             for c in range(self._cols):
                 cell = ImageCell(self._cell_size)
-                cell.clicked.connect(self._on_cell_clicked)
+                cell.clicked.connect(self._on_cell_normal_click)
+                cell.shift_clicked.connect(self._on_cell_shift_click)
                 self._grid_layout.addWidget(cell, r, c)
                 self._cells.append(cell)
 
@@ -386,5 +394,24 @@ class ImageGridWidget(QWidget):
     # Private — cell click
     # ------------------------------------------------------------------
 
-    def _on_cell_clicked(self, dataset_index: int) -> None:
+    def _on_cell_normal_click(self, dataset_index: int) -> None:
+        self._anchor_ds_index = dataset_index
         self.sig_cell_clicked.emit(dataset_index)
+
+    def _on_cell_shift_click(self, dataset_index: int) -> None:
+        # If no anchor yet, or anchor is no longer in the current view, treat as normal
+        if (
+            self._anchor_ds_index is None
+            or self._anchor_ds_index not in self._indices
+        ):
+            self._anchor_ds_index = dataset_index
+            self.sig_cell_clicked.emit(dataset_index)
+            return
+
+        anchor_pos = self._indices.index(self._anchor_ds_index)
+        end_pos = self._indices.index(dataset_index)
+        start = min(anchor_pos, end_pos)
+        end = max(anchor_pos, end_pos)
+        selected = self._indices[start : end + 1]
+        # Anchor stays on the first click, not the shift-click (file-explorer behaviour)
+        self.sig_cells_range_selected.emit(selected)
