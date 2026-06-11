@@ -35,8 +35,14 @@ from PyQt5.QtWidgets import (
 # ---------------------------------------------------------------------------
 
 _PENDING_COLOUR = QColor(255, 200, 0, 120)       # amber, semi-transparent
-_LABELED_COLOUR = QColor(0, 180, 0, 120)         # green, semi-transparent
 _BADGE_FONT = QFont("Arial", 7, QFont.Bold)
+
+
+def _hex_to_overlay(hex_colour: str, alpha: int = 110) -> QColor:
+    """Convert a hex colour string to a semi-transparent QColor for overlays."""
+    c = QColor(hex_colour)
+    c.setAlpha(alpha)
+    return c
 
 
 class ImageCell(QFrame):
@@ -49,7 +55,8 @@ class ImageCell(QFrame):
         self._cell_size = cell_size
         self._index: int = -1
         self._pending: bool = False
-        self._label_name: str | None = None   # None = unlabeled/no badge
+        self._label_name: str | None = None
+        self._overlay_colour: QColor | None = None
 
         self.setFixedSize(cell_size, cell_size)
         self.setFrameShape(QFrame.Box)
@@ -72,11 +79,13 @@ class ImageCell(QFrame):
         filename: str,
         pending: bool = False,
         label_name: str | None = None,
+        overlay_colour: QColor | None = None,
     ) -> None:
         self._index = index
         self._pixmap = pixmap
         self._pending = pending
         self._label_name = label_name
+        self._overlay_colour = overlay_colour
         self.setToolTip(filename)
         self._render()
 
@@ -123,9 +132,10 @@ class ImageCell(QFrame):
 
         # Labeled overlay + badge
         if self._label_name is not None:
-            painter.fillRect(0, 0, self._cell_size, self._cell_size, _LABELED_COLOUR)
+            colour = self._overlay_colour if self._overlay_colour is not None else QColor(0, 180, 0, 110)
+            painter.fillRect(0, 0, self._cell_size, self._cell_size, colour)
             painter.setFont(_BADGE_FONT)
-            painter.setPen(Qt.white)
+            painter.setPen(Qt.black)
             badge_rect = result.rect().adjusted(2, 2, -2, -2)
             painter.drawText(
                 badge_rect,
@@ -177,6 +187,7 @@ class ImageGridWidget(QWidget):
         self._filenames: list[str] = []
         self._pending: set[int] = set()             # dataset indices pending commit
         self._label_names: dict[int, str] = {}      # dataset index → class name
+        self._label_colours: dict[int, QColor] = {} # dataset index → overlay colour
 
         self._cells: list[ImageCell] = []
         self._build_ui()
@@ -192,12 +203,14 @@ class ImageGridWidget(QWidget):
         filenames: list[str],
         pending: set[int] | None = None,
         label_names: dict[int, str] | None = None,
+        label_colours: dict[int, QColor] | None = None,
     ) -> None:
         """Replace the current image set and redraw from page 0."""
         self._indices = list(indices)
         self._filenames = list(filenames)
         self._pending = set(pending) if pending else set()
         self._label_names = dict(label_names) if label_names else {}
+        self._label_colours = dict(label_colours) if label_colours else {}
         self._page = 0
 
         # Convert numpy arrays → QPixmap (done once, cached)
@@ -335,7 +348,8 @@ class ImageGridWidget(QWidget):
             fname = self._filenames[data_pos]
             pending = ds_idx in self._pending
             label_name = self._label_names.get(ds_idx)
-            cell.set_image(ds_idx, pixmap, fname, pending=pending, label_name=label_name)
+            overlay_colour = self._label_colours.get(ds_idx)
+            cell.set_image(ds_idx, pixmap, fname, pending=pending, label_name=label_name, overlay_colour=overlay_colour)
 
         self._btn_prev.setEnabled(self._page > 0)
         self._btn_next.setEnabled(self._page < self.total_pages - 1)

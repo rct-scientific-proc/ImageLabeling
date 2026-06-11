@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 
 from src.gui.image_grid import ImageGridWidget
 from src.gui.label_panel import LabelPanel
+from src.gui.label_stats_panel import LabelStatsPanel
 from src.gui.training_panel import TrainingPanel
 
 
@@ -115,6 +116,10 @@ class MainWindow(QMainWindow):
         self._label_panel.sig_remove_label.connect(self._on_label_removed)
         self._label_panel.sig_selection_changed.connect(self._on_label_selection_changed)
         right_col.addWidget(self._label_panel)
+
+        self._stats_panel = LabelStatsPanel()
+        self._stats_panel.setFixedWidth(220)
+        right_col.addWidget(self._stats_panel)
 
         self._training_panel = TrainingPanel()
         self._training_panel.setFixedWidth(220)
@@ -225,7 +230,9 @@ class MainWindow(QMainWindow):
 
         import h5py
         import numpy as np
+        from PyQt5.QtGui import QColor
         from src.h5io import UNLABELED, get_classes
+        from src.gui.label_stats_panel import CLASS_COLOURS, HARD_NEGATIVE_COLOUR
 
         with h5py.File(self._h5_path, "r") as f:
             images = f["images"][:]
@@ -234,15 +241,28 @@ class MainWindow(QMainWindow):
 
         classes = get_classes(self._h5_path)
 
+        # Build a QColor for each class index (used by the image grid overlays)
+        def _class_colour(class_idx: int) -> QColor:
+            name = classes[class_idx]
+            hex_col = HARD_NEGATIVE_COLOUR if name == "hard_negative" else CLASS_COLOURS[class_idx % len(CLASS_COLOURS)]
+            c = QColor(hex_col)
+            c.setAlpha(130)
+            return c
+
         if self._show_labeled:
             mask = labels != UNLABELED
             label_names = {
                 int(i): classes[int(labels[i])]
                 for i in np.where(mask)[0]
             }
+            label_colours = {
+                int(i): _class_colour(int(labels[i]))
+                for i in np.where(mask)[0]
+            }
         else:
             mask = labels == UNLABELED
             label_names = {}
+            label_colours = {}
 
         indices = list(np.where(mask)[0].astype(int))
         self._image_grid.load_images(
@@ -251,12 +271,14 @@ class MainWindow(QMainWindow):
             filenames=[filenames[i] for i in indices],
             pending=set(self._pending_assignments.keys()),
             label_names=label_names,
+            label_colours=label_colours,
         )
         n = len(indices)
         kind = "labeled" if self._show_labeled else "unlabeled"
         self.statusBar().showMessage(
             f"{self._h5_path.name} — {n} {kind} image(s)"
         )
+        self._stats_panel.refresh(self._h5_path)
 
     # ------------------------------------------------------------------
     # Slots — View menu
@@ -366,8 +388,37 @@ class MainWindow(QMainWindow):
         )
 
     def _on_label_hard_negative(self) -> None:
-        # Phase 7 will implement bulk hard-negative assignment
-        pass
+        """Assign hard_negative + gt=False to every currently visible unlabeled image."""
+        if self._h5_path is None:
+            return
+
+        import h5py
+        import numpy as np
+        from src.h5io import UNLABELED, get_classes, update_gt, update_labels
+
+        with h5py.File(self._h5_path, "r") as f:
+            labels = f["labels"][:]
+
+        unlabeled_indices = list(np.where(labels == UNLABELED)[0].astype(int))
+        if not unlabeled_indices:
+            self.statusBar().showMessage("No unlabeled images to assign.")
+            return
+
+        classes = get_classes(self._h5_path)
+        hard_neg_idx = classes.index("hard_negative")
+
+        update_labels(self._h5_path, unlabeled_indices, [hard_neg_idx] * len(unlabeled_indices))
+        update_gt(self._h5_path, unlabeled_indices, [False] * len(unlabeled_indices))
+
+        # Clear any pending assignments that were just committed
+        for idx in unlabeled_indices:
+            self._pending_assignments.pop(idx, None)
+
+        self._refresh_grid()
+        self._update_add_labels_button()
+        self.statusBar().showMessage(
+            f"Labeled {len(unlabeled_indices)} image(s) as hard_negative."
+        )
 
     def _update_add_labels_button(self) -> None:
         enabled = (
