@@ -284,10 +284,14 @@ class MainWindow(QMainWindow):
     def _on_label_removed(self, row: int) -> None:
         if self._h5_path is None:
             return
-        from src.h5io import get_classes, get_n_images, update_classes
+        from src.h5io import (
+            get_classes,
+            remap_labels_after_removal,
+            update_classes,
+            UNLABELED,
+        )
         import h5py
         import numpy as np
-        from src.h5io import UNLABELED
 
         classes = get_classes(self._h5_path)
         target_name = classes[row]
@@ -305,6 +309,8 @@ class MainWindow(QMainWindow):
 
         classes.pop(row)
         update_classes(self._h5_path, classes)
+        # Fix up any label indices that shifted down due to the removal
+        remap_labels_after_removal(self._h5_path, row)
         self._label_panel.set_classes(classes)
 
     def _on_label_selection_changed(self, index: object) -> None:

@@ -212,6 +212,21 @@ def update_classes(h5_path: Path, classes: list[str]) -> None:
         f["classes"][:] = np.array(classes, dtype=object)
 
 
+def remap_labels_after_removal(h5_path: Path, removed_index: int) -> None:
+    """Decrement every label index that is strictly greater than *removed_index*.
+
+    Call this **after** the class at *removed_index* has been removed from the
+    ``classes`` dataset so that all remaining label pointers stay valid.
+    Unlabeled entries (``UNLABELED = 0xFFFF``) are left untouched.
+    """
+    with h5py.File(h5_path, "a") as f:
+        labels = f["labels"][:]
+        mask = (labels != UNLABELED) & (labels > removed_index)
+        if np.any(mask):
+            labels[mask] = (labels[mask] - 1).astype(np.uint16)
+            f["labels"][:] = labels
+
+
 # ---------------------------------------------------------------------------
 # Read helpers
 # ---------------------------------------------------------------------------
