@@ -36,6 +36,7 @@ class MainWindow(QMainWindow):
         self._show_labeled: bool = False   # False = unlabeled, True = labeled
         # Maps dataset index → class index for images clicked but not yet committed
         self._pending_assignments: dict[int, int] = {}
+        self._training_worker = None   # active TrainingWorker, if any
 
         self._build_menu()
         self._build_central()
@@ -446,11 +447,50 @@ class MainWindow(QMainWindow):
         self._btn_add_labels.setEnabled(enabled)
 
     # ------------------------------------------------------------------
-    # Slots — Training panel (stubs, wired in Phase 8)
+    # Slots — Training panel
     # ------------------------------------------------------------------
 
     def _on_start_training(self, config: dict) -> None:
-        pass
+        if self._h5_path is None:
+            self.statusBar().showMessage("Open a dataset before training.")
+            return
+        if self._training_worker is not None and self._training_worker.isRunning():
+            return
+
+        from src.training.trainer import TrainingWorker
+
+        self._training_worker = TrainingWorker(
+            h5_path=self._h5_path,
+            epochs=config["epochs"],
+            batch_size=config["batch_size"],
+            target_metric=config["target_metric"],
+        )
+        self._training_worker.sig_progress.connect(self._on_training_progress)
+        self._training_worker.sig_finished.connect(self._on_training_finished)
+        self._training_worker.sig_error.connect(self._on_training_error)
+
+        self._training_panel.set_training_active(True)
+        self._training_panel.set_progress(0, config["epochs"], "Starting…")
+        self._training_worker.start()
 
     def _on_stop_training(self) -> None:
-        pass
+        if self._training_worker is not None and self._training_worker.isRunning():
+            self._training_worker.request_stop()
+            self.statusBar().showMessage("Stopping training…")
+
+    def _on_training_progress(self, current: int, total: int, status: str) -> None:
+        self._training_panel.set_progress(current, total, status)
+
+    def _on_training_finished(self, message: str) -> None:
+        self._training_panel.set_training_active(False)
+        self._training_panel.set_progress(0, 1, message)
+        self.statusBar().showMessage(message)
+        self._training_worker = None
+
+    def _on_training_error(self, message: str) -> None:
+        from PyQt5.QtWidgets import QMessageBox
+
+        self._training_panel.set_training_active(False)
+        QMessageBox.critical(self, "Training Error", message)
+        self.statusBar().showMessage(f"Training error: {message}")
+        self._training_worker = None
