@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from src.gui.image_grid import ImageGridWidget
 from src.gui.label_panel import LabelPanel
 from src.gui.training_panel import TrainingPanel
 
@@ -79,16 +80,9 @@ class MainWindow(QMainWindow):
         centre_col = QVBoxLayout()
         centre_col.setSpacing(6)
 
-        # Image grid placeholder (replaced in Phase 4)
-        self._grid_placeholder = QLabel("Image grid — Phase 4")
-        self._grid_placeholder.setAlignment(Qt.AlignCenter)
-        self._grid_placeholder.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Expanding
-        )
-        self._grid_placeholder.setStyleSheet(
-            "border: 1px dashed #888; color: #888; font-size: 14px;"
-        )
-        centre_col.addWidget(self._grid_placeholder, stretch=1)
+        self._image_grid = ImageGridWidget()
+        self._image_grid.sig_cell_clicked.connect(self._on_cell_clicked)
+        centre_col.addWidget(self._image_grid, stretch=1)
 
         # Action buttons below the grid
         action_row = QHBoxLayout()
@@ -220,6 +214,46 @@ class MainWindow(QMainWindow):
         self._btn_hard_negative.setEnabled(True)
         self.setWindowTitle(f"Image Labeling Tool — {h5_path.name}")
         self.statusBar().showMessage(f"Opened: {h5_path}")
+        self._refresh_grid()
+
+    def _refresh_grid(self) -> None:
+        """Load the current view (labeled / unlabeled) into the image grid."""
+        if self._h5_path is None:
+            return
+
+        import h5py
+        import numpy as np
+        from src.h5io import UNLABELED, get_classes
+
+        with h5py.File(self._h5_path, "r") as f:
+            images = f["images"][:]
+            labels = f["labels"][:]
+            filenames = list(f["filenames"].asstr()[:])
+
+        classes = get_classes(self._h5_path)
+
+        if self._show_labeled:
+            mask = labels != UNLABELED
+            label_names = {
+                int(i): classes[int(labels[i])]
+                for i in np.where(mask)[0]
+            }
+        else:
+            mask = labels == UNLABELED
+            label_names = {}
+
+        indices = list(np.where(mask)[0].astype(int))
+        self._image_grid.load_images(
+            indices=indices,
+            images=images[mask],
+            filenames=[filenames[i] for i in indices],
+            label_names=label_names,
+        )
+        n = len(indices)
+        kind = "labeled" if self._show_labeled else "unlabeled"
+        self.statusBar().showMessage(
+            f"{self._h5_path.name} — {n} {kind} image(s)"
+        )
 
     # ------------------------------------------------------------------
     # Slots — View menu
@@ -227,12 +261,10 @@ class MainWindow(QMainWindow):
 
     def _on_toggle_view(self, checked: bool) -> None:
         self._show_labeled = checked
-        label = "Show Unlabeled Images" if checked else "Show Labeled Images"
-        self._toggle_view_action.setText(label)
-        # Grid will be refreshed in Phase 4
-        self.statusBar().showMessage(
-            "Showing labeled images" if checked else "Showing unlabeled images"
+        self._toggle_view_action.setText(
+            "Show Unlabeled Images" if checked else "Show Labeled Images"
         )
+        self._refresh_grid()
 
     # ------------------------------------------------------------------
     # Slots — Label panel
@@ -278,6 +310,19 @@ class MainWindow(QMainWindow):
     def _on_label_selection_changed(self, index: object) -> None:
         has_selection = index is not None
         self._btn_add_labels.setEnabled(has_selection and self._h5_path is not None)
+
+    # ------------------------------------------------------------------
+    # Slots — Cell click
+    # ------------------------------------------------------------------
+
+    def _on_cell_clicked(self, dataset_index: int) -> None:
+        """Toggle pending state on click; full commit wired in Phase 6."""
+        if self._show_labeled:
+            return   # no interaction on labeled view yet
+        self._image_grid.mark_pending(
+            dataset_index,
+            pending=dataset_index not in self._image_grid._pending,
+        )
 
     # ------------------------------------------------------------------
     # Slots — Action buttons (stubs, fully wired in Phase 6 / 7)
