@@ -18,6 +18,7 @@ from __future__ import annotations
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import (
+    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -196,6 +197,8 @@ class ImageGridWidget(QWidget):
 
         self._cells: list[ImageCell] = []
         self._anchor_ds_index: int | None = None   # anchor for shift-click range
+        # confidence scores: {dataset_index: np.ndarray(num_classes)}
+        self._confidence_scores: dict[int, object] = {}
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -236,6 +239,55 @@ class ImageGridWidget(QWidget):
         else:
             self._pending.discard(dataset_index)
         self._refresh_cell(dataset_index)
+
+    def update_classes_for_sort(self, classes: list[str]) -> None:
+        """Populate the sort dropdown with class names."""
+        self._sort_combo.blockSignals(True)
+        prev = self._sort_combo.currentText()
+        self._sort_combo.clear()
+        self._sort_combo.addItem("— no sort —")
+        for name in classes:
+            self._sort_combo.addItem(name)
+        # Restore previous selection if still valid
+        idx = self._sort_combo.findText(prev)
+        self._sort_combo.setCurrentIndex(max(0, idx))
+        self._sort_combo.blockSignals(False)
+
+    def set_confidence_scores(self, scores: dict) -> None:
+        """Store confidence scores and re-sort if a sort class is active."""
+        self._confidence_scores = scores
+        self._apply_sort()
+
+    def sort_by_confidence(self, class_index: int | None) -> None:
+        """Re-order ``_indices`` / ``_pixmaps`` / ``_filenames`` by descending
+        confidence for *class_index*.  Pass ``None`` to restore original order.
+        """
+        if class_index is None or not self._confidence_scores:
+            return
+
+        import numpy as np
+
+        def _score(ds_idx: int) -> float:
+            probs = self._confidence_scores.get(ds_idx)
+            if probs is None:
+                return -1.0
+            return float(probs[class_index])
+
+        order = sorted(range(len(self._indices)), key=lambda i: _score(self._indices[i]), reverse=True)
+        self._indices = [self._indices[i] for i in order]
+        self._pixmaps = [self._pixmaps[i] for i in order]
+        self._filenames = [self._filenames[i] for i in order]
+        self._page = 0
+        self._update_page_label()
+        self._render_page()
+
+    def _apply_sort(self) -> None:
+        """Re-apply the currently selected sort class (if any)."""
+        idx = self._sort_combo.currentIndex()
+        if idx <= 0:
+            return
+        # Combo index 1 → class 0, etc.
+        self.sort_by_confidence(idx - 1)
 
     @property
     def current_page_indices(self) -> list[int]:
@@ -296,6 +348,16 @@ class ImageGridWidget(QWidget):
         config_row.addWidget(self._cols_spin)
         config_row.addStretch()
         outer.addLayout(config_row)
+
+        # --- sort row ---
+        sort_row = QHBoxLayout()
+        sort_row.setSpacing(6)
+        sort_row.addWidget(QLabel("Sort by:"))
+        self._sort_combo = QComboBox()
+        self._sort_combo.addItem("— no sort —")
+        self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+        sort_row.addWidget(self._sort_combo, stretch=1)
+        outer.addLayout(sort_row)
 
         # --- scroll area containing the grid ---
         scroll = QScrollArea()
@@ -422,3 +484,14 @@ class ImageGridWidget(QWidget):
         selected = self._indices[start : end + 1]
         # Anchor stays on the first click, not the shift-click (file-explorer behaviour)
         self.sig_cells_range_selected.emit(selected)
+
+    # ------------------------------------------------------------------
+    # Private — sort
+    # ------------------------------------------------------------------
+
+    def _on_sort_changed(self, combo_index: int) -> None:
+        """Triggered when the user picks a class from the sort dropdown."""
+        if combo_index <= 0:
+            # Reset to load order; reload is handled externally via _refresh_grid
+            return
+        self.sort_by_confidence(combo_index - 1)  # combo index 1 → class index 0

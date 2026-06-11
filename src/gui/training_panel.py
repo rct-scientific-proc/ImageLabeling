@@ -34,6 +34,7 @@ class TrainingPanel(QWidget):
             "batch_size": self._batch_size.value(),
             "target_metric": self._target_metric.value(),
             "val_split": self._val_split.value(),
+            "inference_batch_size": self._inference_batch_size.value(),
         }
 
     def set_progress(self, value: int, maximum: int, status: str = "") -> None:
@@ -83,6 +84,11 @@ class TrainingPanel(QWidget):
         self._val_split.setValue(0.20)
         self._val_split.setDecimals(2)
         form.addRow("Val split:", self._val_split)
+
+        self._inference_batch_size = QSpinBox()
+        self._inference_batch_size.setRange(1, 1024)
+        self._inference_batch_size.setValue(64)
+        form.addRow("Inference batch:", self._inference_batch_size)
 
         self._btn_train = QPushButton("Start Training")
         self._btn_stop = QPushButton("Stop")

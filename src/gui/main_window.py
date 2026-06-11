@@ -33,10 +33,12 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
 
         self._h5_path: Path | None = None
-        self._show_labeled: bool = False   # False = unlabeled, True = labeled
-        # Maps dataset index → class index for images clicked but not yet committed
+        self._show_labeled: bool = False
         self._pending_assignments: dict[int, int] = {}
-        self._training_worker = None   # active TrainingWorker, if any
+        self._training_worker = None
+        self._inference_worker = None
+        # {dataset_index: np.ndarray(num_classes)} — kept in memory between runs
+        self._confidence_scores: dict[int, object] = {}
 
         self._build_menu()
         self._build_central()
@@ -101,8 +103,13 @@ class MainWindow(QMainWindow):
         self._btn_hard_negative.setEnabled(False)
         self._btn_hard_negative.clicked.connect(self._on_label_hard_negative)
 
+        self._btn_run_inference = QPushButton("Run Inference")
+        self._btn_run_inference.setEnabled(False)
+        self._btn_run_inference.clicked.connect(self._on_run_inference)
+
         action_row.addWidget(self._btn_add_labels)
         action_row.addWidget(self._btn_hard_negative)
+        action_row.addWidget(self._btn_run_inference)
         action_row.addStretch()
         centre_col.addLayout(action_row)
 
@@ -220,7 +227,9 @@ class MainWindow(QMainWindow):
         self._h5_path = h5_path
         classes = get_classes(h5_path)
         self._label_panel.set_classes(classes)
+        self._image_grid.update_classes_for_sort(classes)
         self._btn_hard_negative.setEnabled(True)
+        self._btn_run_inference.setEnabled(True)
         self.setWindowTitle(f"Image Labeling Tool — {h5_path.name}")
         self.statusBar().showMessage(f"Opened: {h5_path}")
         self._refresh_grid()
@@ -307,6 +316,7 @@ class MainWindow(QMainWindow):
         classes.insert(len(classes) - 1, name)
         update_classes(self._h5_path, classes)
         self._label_panel.set_classes(classes)
+        self._image_grid.update_classes_for_sort(classes)
 
     def _on_label_removed(self, row: int) -> None:
         if self._h5_path is None:
@@ -339,6 +349,7 @@ class MainWindow(QMainWindow):
         # Fix up any label indices that shifted down due to the removal
         remap_labels_after_removal(self._h5_path, row)
         self._label_panel.set_classes(classes)
+        self._image_grid.update_classes_for_sort(classes)
 
     def _on_label_selection_changed(self, index: object) -> None:
         self._update_add_labels_button()
@@ -495,3 +506,50 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Training Error", message)
         self.statusBar().showMessage(f"Training error: {message}")
         self._training_worker = None
+
+    # ------------------------------------------------------------------
+    # Slots — Inference
+    # ------------------------------------------------------------------
+
+    def _on_run_inference(self) -> None:
+        if self._h5_path is None:
+            return
+        if self._inference_worker is not None and self._inference_worker.isRunning():
+            return
+
+        from src.h5io import get_classes
+        from src.training.inferencer import InferenceWorker
+        from src.training.trainer import DEFAULT_CHECKPOINT
+
+        classes = get_classes(self._h5_path)
+        self._inference_worker = InferenceWorker(
+            h5_path=self._h5_path,
+            num_classes=len(classes),
+            checkpoint_path=DEFAULT_CHECKPOINT,
+            batch_size=self._training_panel.get_config()["inference_batch_size"],
+        )
+        self._inference_worker.sig_progress.connect(self._on_inference_progress)
+        self._inference_worker.sig_finished.connect(self._on_inference_finished)
+        self._inference_worker.sig_error.connect(self._on_inference_error)
+        self._btn_run_inference.setEnabled(False)
+        self.statusBar().showMessage("Running inference…")
+        self._inference_worker.start()
+
+    def _on_inference_progress(self, current: int, total: int) -> None:
+        self.statusBar().showMessage(f"Inference: {current}/{total} images…")
+
+    def _on_inference_finished(self, scores: dict) -> None:
+        self._confidence_scores = scores
+        self._image_grid.set_confidence_scores(scores)
+        self._btn_run_inference.setEnabled(True)
+        self._inference_worker = None
+        self.statusBar().showMessage(
+            f"Inference complete — {len(scores)} image(s) scored. "
+            "Use 'Sort by' to rank by confidence."
+        )
+
+    def _on_inference_error(self, message: str) -> None:
+        self._btn_run_inference.setEnabled(True)
+        self._inference_worker = None
+        QMessageBox.critical(self, "Inference Error", message)
+        self.statusBar().showMessage(f"Inference error: {message}")
