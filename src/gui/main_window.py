@@ -33,6 +33,8 @@ class MainWindow(QMainWindow):
 
         self._h5_path: Path | None = None
         self._show_labeled: bool = False   # False = unlabeled, True = labeled
+        # Maps dataset index → class index for images clicked but not yet committed
+        self._pending_assignments: dict[int, int] = {}
 
         self._build_menu()
         self._build_central()
@@ -247,6 +249,7 @@ class MainWindow(QMainWindow):
             indices=indices,
             images=images[mask],
             filenames=[filenames[i] for i in indices],
+            pending=set(self._pending_assignments.keys()),
             label_names=label_names,
         )
         n = len(indices)
@@ -314,33 +317,66 @@ class MainWindow(QMainWindow):
         self._label_panel.set_classes(classes)
 
     def _on_label_selection_changed(self, index: object) -> None:
-        has_selection = index is not None
-        self._btn_add_labels.setEnabled(has_selection and self._h5_path is not None)
+        self._update_add_labels_button()
 
     # ------------------------------------------------------------------
     # Slots — Cell click
     # ------------------------------------------------------------------
 
     def _on_cell_clicked(self, dataset_index: int) -> None:
-        """Toggle pending state on click; full commit wired in Phase 6."""
+        """Assign the active label to the clicked image as a pending change."""
         if self._show_labeled:
-            return   # no interaction on labeled view yet
-        self._image_grid.mark_pending(
-            dataset_index,
-            pending=dataset_index not in self._image_grid._pending,
-        )
+            return
+
+        active = self._label_panel.active_label_index
+        if active is None:
+            self.statusBar().showMessage("Select a label from the panel first.")
+            return
+
+        if dataset_index in self._pending_assignments:
+            # Second click on a pending image cancels the assignment
+            del self._pending_assignments[dataset_index]
+            self._image_grid.mark_pending(dataset_index, False)
+        else:
+            self._pending_assignments[dataset_index] = active
+            self._image_grid.mark_pending(dataset_index, True)
+
+        self._update_add_labels_button()
 
     # ------------------------------------------------------------------
     # Slots — Action buttons (stubs, fully wired in Phase 6 / 7)
     # ------------------------------------------------------------------
 
     def _on_add_labels(self) -> None:
-        # Phase 6 will implement pending-label commit logic
-        pass
+        if not self._pending_assignments or self._h5_path is None:
+            return
+        from src.h5io import update_labels, update_gt
+
+        indices = list(self._pending_assignments.keys())
+        label_values = list(self._pending_assignments.values())
+        update_labels(self._h5_path, indices, label_values)
+        update_gt(self._h5_path, indices, [True] * len(indices))
+
+        committed = len(indices)
+        self._pending_assignments.clear()
+        self._refresh_grid()
+        self._update_add_labels_button()
+        self.statusBar().showMessage(
+            f"Committed {committed} label(s) to {self._h5_path.name}"
+        )
 
     def _on_label_hard_negative(self) -> None:
         # Phase 7 will implement bulk hard-negative assignment
         pass
+
+    def _update_add_labels_button(self) -> None:
+        enabled = (
+            self._h5_path is not None
+            and not self._show_labeled
+            and bool(self._pending_assignments)
+            and self._label_panel.active_label_index is not None
+        )
+        self._btn_add_labels.setEnabled(enabled)
 
     # ------------------------------------------------------------------
     # Slots — Training panel (stubs, wired in Phase 8)
