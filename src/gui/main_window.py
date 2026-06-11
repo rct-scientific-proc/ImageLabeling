@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QAction,
+    QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -23,7 +25,10 @@ from PyQt5.QtWidgets import (
 from src.gui.image_grid import ImageGridWidget
 from src.gui.label_panel import LabelPanel
 from src.gui.label_stats_panel import LabelStatsPanel
+from src.gui.log_panel import LogPanel
 from src.gui.training_panel import TrainingPanel
+
+log = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -42,6 +47,7 @@ class MainWindow(QMainWindow):
 
         self._build_menu()
         self._build_central()
+        self._build_log_dock()
 
     # ------------------------------------------------------------------
     # Menu
@@ -71,6 +77,14 @@ class MainWindow(QMainWindow):
         self._toggle_view_action.setChecked(False)
         self._toggle_view_action.triggered.connect(self._on_toggle_view)
         view_menu.addAction(self._toggle_view_action)
+
+        view_menu.addSeparator()
+        self._log_dock_action = QAction("Logging", self)
+        self._log_dock_action.setCheckable(True)
+        self._log_dock_action.setChecked(False)
+        self._log_dock_action.setShortcut("Ctrl+L")
+        self._log_dock_action.triggered.connect(self._on_toggle_log_dock)
+        view_menu.addAction(self._log_dock_action)
 
     # ------------------------------------------------------------------
     # Central widget layout
@@ -144,6 +158,36 @@ class MainWindow(QMainWindow):
         # Status bar
         self.statusBar().showMessage("No file open")
 
+    def _build_log_dock(self) -> None:
+        self._log_panel = LogPanel()
+        self._log_panel.install()
+
+        self._log_dock = QDockWidget("Log", self)
+        self._log_dock.setObjectName("LogDock")
+        self._log_dock.setWidget(self._log_panel)
+        self._log_dock.setMinimumHeight(120)
+        # Allow docking on all sides and floating (detachable)
+        self._log_dock.setAllowedAreas(
+            Qt.BottomDockWidgetArea | Qt.TopDockWidgetArea
+            | Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea
+        )
+        self._log_dock.setFeatures(
+            QDockWidget.DockWidgetMovable
+            | QDockWidget.DockWidgetFloatable
+            | QDockWidget.DockWidgetClosable
+        )
+        self._log_dock.visibilityChanged.connect(self._log_dock_action.setChecked)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self._log_dock)
+        self._log_dock.hide()   # hidden by default
+        log.info("Image Labeling Tool started.")
+
+    def _on_toggle_log_dock(self, checked: bool) -> None:
+        if checked:
+            self._log_dock.show()
+            self._log_dock.raise_()
+        else:
+            self._log_dock.hide()
+
     # ------------------------------------------------------------------
     # Slots — File menu
     # ------------------------------------------------------------------
@@ -182,6 +226,7 @@ class MainWindow(QMainWindow):
         )
         if not h5_str:
             return
+        log.info("Opening H5 file: %s", h5_str)
         self._load_h5(Path(h5_str))
 
     def _run_ingest(
@@ -214,10 +259,12 @@ class MainWindow(QMainWindow):
             n = ingest_directory(dir_path, h5_path, image_size, progress_callback=_cb)
         except Exception as exc:
             progress.close()
+            log.error("Ingest failed: %s", exc)
             QMessageBox.critical(self, "Ingest Error", str(exc))
             return
 
         progress.close()
+        log.info("Ingested %d images from %s → %s", n, dir_path, h5_path.name)
         self._load_h5(h5_path)
         self.statusBar().showMessage(f"Ingested {n} images → {h5_path.name}")
 
@@ -232,6 +279,7 @@ class MainWindow(QMainWindow):
         self._btn_run_inference.setEnabled(True)
         self.setWindowTitle(f"Image Labeling Tool — {h5_path.name}")
         self.statusBar().showMessage(f"Opened: {h5_path}")
+        log.info("Loaded dataset: %s  (%d classes)", h5_path.name, len(classes))
         self._refresh_grid()
 
     def _refresh_grid(self) -> None:
@@ -415,6 +463,7 @@ class MainWindow(QMainWindow):
         self._pending_assignments.clear()
         self._refresh_grid()
         self._update_add_labels_button()
+        log.info("Committed %d label(s).", committed)
         self.statusBar().showMessage(
             f"Committed {committed} label(s) to {self._h5_path.name}"
         )
@@ -444,6 +493,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_grid()
         self._update_add_labels_button()
+        log.info("Hard-negative: labeled %d image(s).", len(unlabeled_indices))
         self.statusBar().showMessage(
             f"Labeled {len(unlabeled_indices)} image(s) as hard_negative."
         )
@@ -492,10 +542,12 @@ class MainWindow(QMainWindow):
 
     def _on_training_progress(self, current: int, total: int, status: str) -> None:
         self._training_panel.set_progress(current, total, status)
+        log.info("[Training] %s", status)
 
     def _on_training_finished(self, message: str) -> None:
         self._training_panel.set_training_active(False)
         self._training_panel.set_progress(0, 1, message)
+        log.info("[Training] %s", message)
         self.statusBar().showMessage(message)
         self._training_worker = None
 
@@ -503,6 +555,7 @@ class MainWindow(QMainWindow):
         from PyQt5.QtWidgets import QMessageBox
 
         self._training_panel.set_training_active(False)
+        log.error("[Training] %s", message)
         QMessageBox.critical(self, "Training Error", message)
         self.statusBar().showMessage(f"Training error: {message}")
         self._training_worker = None
@@ -537,19 +590,22 @@ class MainWindow(QMainWindow):
 
     def _on_inference_progress(self, current: int, total: int) -> None:
         self.statusBar().showMessage(f"Inference: {current}/{total} images…")
-
+        log.debug("[Inference] %d / %d", current, total)
     def _on_inference_finished(self, scores: dict) -> None:
         self._confidence_scores = scores
         self._image_grid.set_confidence_scores(scores)
         self._btn_run_inference.setEnabled(True)
         self._inference_worker = None
-        self.statusBar().showMessage(
-            f"Inference complete — {len(scores)} image(s) scored. "
+        msg = (
+            f"Inference complete \u2014 {len(scores)} image(s) scored. "
             "Use 'Sort by' to rank by confidence."
         )
+        log.info("[Inference] Scored %d images.", len(scores))
+        self.statusBar().showMessage(msg)
 
     def _on_inference_error(self, message: str) -> None:
         self._btn_run_inference.setEnabled(True)
         self._inference_worker = None
+        log.error("[Inference] %s", message)
         QMessageBox.critical(self, "Inference Error", message)
         self.statusBar().showMessage(f"Inference error: {message}")
