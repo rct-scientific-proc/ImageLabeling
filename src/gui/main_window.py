@@ -408,18 +408,14 @@ class MainWindow(QMainWindow):
         )
 
     def _on_label_hard_negative(self) -> None:
-        """Assign hard_negative + gt=False to every currently visible unlabeled image."""
+        """Assign hard_negative + gt=False to every unlabeled image in the current grid view."""
         if self._h5_path is None:
             return
 
-        import h5py
-        import numpy as np
-        from src.h5io import UNLABELED, get_classes, update_gt, update_labels
+        from src.h5io import get_classes, update_gt, update_labels
 
-        with h5py.File(self._h5_path, "r") as f:
-            labels = f["labels"][:]
-
-        unlabeled_indices = list(np.where(labels == UNLABELED)[0].astype(int))
+        # Only operate on the images visible on the current page, not the whole dataset
+        unlabeled_indices = list(self._image_grid.current_page_indices)
         if not unlabeled_indices:
             self.statusBar().showMessage("No unlabeled images to assign.")
             return

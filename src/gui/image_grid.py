@@ -237,6 +237,13 @@ class ImageGridWidget(QWidget):
             self._pending.discard(dataset_index)
         self._refresh_cell(dataset_index)
 
+    @property
+    def current_page_indices(self) -> list[int]:
+        """Dataset indices visible on the current page only."""
+        start = self._page * self.page_size
+        end = min(start + self.page_size, len(self._indices))
+        return self._indices[start:end]
+
     def set_grid_size(self, rows: int, cols: int) -> None:
         self._rows = max(1, rows)
         self._cols = max(1, cols)
